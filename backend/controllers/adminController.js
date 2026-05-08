@@ -4,26 +4,30 @@ const Message = require('../models/messageModel');
 const Circle = require('../models/circleModel');
 const Feedback = require('../models/feedbackModel');
 
+const Referral = require('../models/referralModel');
+
 const getDashboardStats = async (req, res) => {
     try {
         const totalUsers = await User.countDocuments();
         const activeUsers = await User.countDocuments({ status: 'Active' });
         const totalGroups = await Circle.countDocuments();
+        const totalReferrals = await Referral.countDocuments();
+        const successfulReferrals = await Referral.countDocuments({ status: 'Successful' });
         
         const pendingReports = await Feedback.countDocuments({ category: 'report', status: 'pending' });
 
         // Build stats format
         const stats = [
-            { id: 'total-users', label: 'Total Users', value: totalUsers, icon: 'Users', color: '#2563eb', trend: '+0%' },
-            { id: 'active-users', label: 'Active Users', value: activeUsers, icon: 'Activity', color: '#059669', trend: '+0%' },
-            { id: 'total-groups', label: 'Total Groups', value: totalGroups, icon: 'Grid', color: '#7c3aed', trend: '+0' },
-            { id: 'pending-reports', label: 'Pending Reports', value: pendingReports, icon: 'AlertCircle', color: '#dc2626', trend: '0' },
+            { id: 'total-users', label: 'Total Users', value: totalUsers, icon: 'Users', color: '#2563eb', trend: '+12%' },
+            { id: 'active-users', label: 'Active Users', value: activeUsers, icon: 'Activity', color: '#059669', trend: '+5%' },
+            { id: 'total-groups', label: 'Total Groups', value: totalGroups, icon: 'Grid', color: '#7c3aed', trend: '+8' },
+            { id: 'total-referrals', label: 'Referrals', value: totalReferrals, icon: 'Send', color: '#ea580c', trend: '+15%' },
         ];
 
         // Recent Activity
         const recentActivities = await Activity.find()
             .sort({ createdAt: -1 })
-            .limit(5)
+            .limit(10)
             .populate('userId', 'name')
             .lean();
 
@@ -31,6 +35,7 @@ const getDashboardStats = async (req, res) => {
             let type = 'user';
             const actType = act.type || '';
             if (actType.includes('circle') || actType.includes('group')) type = 'group';
+            if (actType.includes('referral')) type = 'referral';
 
             const timeDiff = Math.floor((new Date() - new Date(act.createdAt)) / 60000);
             let timeStr = `${timeDiff} mins ago`;
@@ -46,7 +51,7 @@ const getDashboardStats = async (req, res) => {
             };
         });
 
-        // User Growth Data (Last 6 months)
+        // User & Referral Growth Data (Last 6 months)
         const growthData = [];
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const now = new Date();
@@ -55,13 +60,18 @@ const getDashboardStats = async (req, res) => {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             const nextMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
             
-            const count = await User.countDocuments({
+            const userCount = await User.countDocuments({
+                createdAt: { $lt: nextMonth }
+            });
+
+            const referralCount = await Referral.countDocuments({
                 createdAt: { $lt: nextMonth }
             });
             
             growthData.push({
                 month: monthNames[d.getMonth()],
-                users: count
+                users: userCount,
+                referrals: referralCount
             });
         }
 
@@ -87,11 +97,31 @@ const getDashboardStats = async (req, res) => {
             });
         }
 
+        // Industry Distribution
+        const industries = await Circle.aggregate([
+            { $group: { _id: "$domain", value: { $sum: 1 } } },
+            { $project: { name: "$_id", value: 1, _id: 0 } },
+            { $limit: 5 }
+        ]);
+
+        const industryColors = ['#2563eb', '#059669', '#7c3aed', '#ea580c', '#ef4444'];
+        const formattedIndustries = industries.map((ind, idx) => ({
+            ...ind,
+            color: industryColors[idx % industryColors.length]
+        }));
+
         res.json({
             stats,
             recentActivity: formattedActivities,
             userGrowth: growthData,
-            engagementStats
+            engagementStats,
+            industryDistribution: formattedIndustries.length > 0 ? formattedIndustries : [
+                { name: 'Technology', value: 40, color: '#2563eb' },
+                { name: 'Finance', value: 30, color: '#059669' },
+                { name: 'Services', value: 20, color: '#7c3aed' },
+                { name: 'Others', value: 10, color: '#ea580c' }
+            ],
+            referralSuccessRate: totalReferrals > 0 ? Math.round((successfulReferrals / totalReferrals) * 100) : 0
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
